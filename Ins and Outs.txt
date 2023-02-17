@@ -1,0 +1,50 @@
+Inputs:
+    Facing (bot)
+    Facing (opponent)
+    Hitlag_left (bot)
+    Hitlag_left (opponent)
+    on_ground (bot)
+    percent (bot)
+    percent (opponent)
+    PositionX (bot)
+    PositionY (bot)
+    PositionX (opponent)
+    PositionY (opponent)
+    Stock (bot)
+    Stock (opponent)
+
+Outputs:
+    Left
+    Right
+    Up
+    Down
+    Left-Up
+    Right-Up
+    Left-Down
+    Right-Down
+    Neutral
+    A 
+    B
+    Y
+    L 
+    R
+    Z
+    L+A
+    L+B
+    L+R 
+    R+A
+    R+B
+    R+R 
+    U+A
+    U+B
+    D+A
+    D+B
+    D+R 
+    SmashL
+    SmashR
+    SmashD
+    SmashU
+    
+
+
+
