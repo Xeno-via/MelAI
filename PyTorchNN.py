@@ -74,34 +74,3 @@ def GetPredictions(Inputs, model):
     Predicts = Predicts.detach().numpy()
     return Predicts
 
-# model = NeuralNetwork(13, 39, 30).to(device)
-# model = model.float()
-# inputs = np.zeros(13)
-# inputs = [np.float32(i) for i in inputs]
-# inputs = torch.from_numpy(np.array(inputs)).to(device)
-# print(torch.from_numpy(np.zeros(13)))
-# print(model(inputs))
-
-
-
-# def build_model(States, Actions):
-#     model = tf.keras.Sequential([
-#     tf.keras.layers.Dense((States)),
-#     tf.keras.layers.Dense(24),
-#     tf.keras.layers.Dense(24),
-#     tf.keras.layers.Dense(Actions)])
-#     model.compile(tf.keras.optimizers.RMSprop(0.001), loss='mse')
-#     model.fit(np.zeros((10, States)),np.ones((10, Actions)))
-
-#     return model
-
-
-# def MakePrediction(Inputs, Model):
-#     newTensor = tf.constant([Inputs], np.float64)
-#     #print(newTensor)
-#     return Model(newTensor, training=False)
-
-#model = build_model(13, 14)
-#print(MakePrediction([1,1,1,1,1,1,1,1,1,1,1,1,1], model))
-
-
