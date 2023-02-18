@@ -1,5 +1,7 @@
 from collections import deque
 from dis import disco
+import os
+from time import sleep
 import melee
 import numpy as np
 import argparse
@@ -8,50 +10,75 @@ import sys
 import random
 import torch
 import PyTorchNN
-BotStocks = 4
+from Plotting import plot
+import csv
+import json
+BotStocks = 4 # To work out reward stuff
 OppStocks = 4
 BotPercent = 0
 OppPercent = 0
+Scores = []
+MeanScores = []
+TotalScore = 0
+BestScore = 0
+Score = 0
+CharSelected = False
 device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
+print(f"Using {device} device on Agent")
 model = PyTorchNN.NeuralNetwork(13, 39, 30).to(device)
+PyTorchNN.LoadModel("model/model.pth", model)
 Trainer = PyTorchNN.QTrain(Model=model, LearningRate=0.001, Gamma=0.9) # Gamma < 1
-State0 = []
-State1 = []
-NumberOfGames = 0
-GamePlayed = False
-MaxMem = 100000
-BatchSize = 1000
-TradeoffNum = 400
+State0 = [] # to hold oldstate
+State1 = [] # To hold newstate
+NumberOfGames = 0 # Counter
+GamePlayed = False # For console.step stuff
+MaxMem = 100000 # MaxMem size for training
+BatchSize = 1000 # Max Batch size for longtermtrain
+TradeoffNum = 400 # Number of games to stop trying some random inputs
 Memory = deque(maxlen=MaxMem) # Pops Left if MaxMem reached
+
+if os.path.isfile('Plotting/JsonPlot.json'):
+  with open('Plotting/JsonPlot.json') as f:
+    JsonObj = json.load(f)
+  Scores = JsonObj["Scores"]
+  MeanScores = JsonObj["MeanScores"]
+  TotalScore = JsonObj["TotalScore"]
+  NumberOfGames = JsonObj["NumberOfGames"]
+
+def Normalize(Min, X, Max):
+  Normal = (X - Min) / (Max-Min)
+  return Normal
 
 def Remember(State, Action, Reward, NextState):
   Memory.append((State, Action, Reward, NextState))
 
 def LongMemTrain():
-  if len(Memory) > BatchSize:
+  if len(Memory) > BatchSize: # Gets selection of memory to use for training that is the batchsize
     SelectionSample = random.sample(Memory, BatchSize) # List of Tuples
   else:
     SelectionSample = Memory
   
   States, Actions, Rewards, NextStates = zip(*SelectionSample)
-  #Trainer.TrainStep(States, Actions, Rewards, NextStates)
+  Trainer.TrainStep(States, Actions, Rewards, NextStates)
 
 def ShortMemTrain(State, Action, Reward, NextState):
-  #Trainer.TrainStep(State, Action, Reward, NextState)
-  pass
+  Trainer.TrainStep(State, Action, Reward, NextState)
 
 def TradeOff(Predictions):
-  Temp = [29]
-
+  Temp = [0] * 30 
+  Action = 0
   if random.randint(0, 200) < (TradeoffNum - NumberOfGames):
+    #print(random.randint(0,29))
     Temp[random.randint(0,29)] = 1
-    GetAction(Temp)
+    Action = GetAction(Temp)
   else:
-    GetAction(Predictions)
+    Action = GetAction(Predictions)
+    Temp[Action] = 1
+  return Temp
 
 def GetAction(Predictions): #Turns prediction into controller input
   Prediction = np.argmax(Predictions)
-  Action = np.int16(Prediction + 1)
+  Action = np.int16(Prediction) + 1
 
   match Action:
            case 1:
@@ -152,15 +179,16 @@ def GetAction(Predictions): #Turns prediction into controller input
            case 30:
              controller.press_button(melee.enums.Button.BUTTON_A)
              controller.tilt_analog(melee.enums.Button.BUTTON_MAIN, 0.5, 0)
-             #SmashD  
+             #SmashD
+  return Action  
 
 def GetStates():
      Inputs = [gamestate.players[1].facing, gamestate.players[2].facing,
      gamestate.players[1].hitlag_left, gamestate.players[2].hitlag_left, 
      gamestate.players[1].on_ground, gamestate.players[1].percent / 999, 
-     gamestate.players[2].percent / 999, gamestate.players[1].position.x, 
-     gamestate.players[1].position.y, gamestate.players[2].position.x, # Need to normalise X and Y values
-     gamestate.players[2].position.y, gamestate.players[1].stock / 4, 
+     gamestate.players[2].percent / 999, Normalize(-175.7,gamestate.players[1].position.x, 173.6), 
+     Normalize(-91,gamestate.players[1].position.y, 168), Normalize(-175.7,gamestate.players[2].position.x, 173.6), # Need to normalise X and Y values
+     Normalize(-91,gamestate.players[2].position.y, 168), gamestate.players[1].stock / 4, 
      gamestate.players[2].stock / 4]
      
      Inputs = [np.float32(i) for i in Inputs]
@@ -191,7 +219,7 @@ def CheckReward():
       OppPercent = gamestate.players[2].percent
 
   if gamestate.players[2].stock < OppStocks:
-      FitneRewardss += 10
+      Reward += 10
       OppStocks = gamestate.players[2].stock
       OppPercent = 0
 
@@ -215,10 +243,11 @@ args = parser.parse_args()
 
 console = melee.Console(path=args.dolphin_executable_path)
 controller = melee.Controller(console=console, port=1, type=melee.ControllerType.STANDARD)
-controller_opponent = melee.Controller(console=console, port=2, type=melee.ControllerType.GCN_ADAPTER)
+controller_opponent = melee.Controller(console=console, port=2, type=melee.ControllerType.STANDARD)
 console.run()
 console.connect()
 controller.connect()
+controller_opponent.connect()
 costume = 1
 framedata = melee.framedata.FrameData()
 
@@ -236,7 +265,7 @@ while True:
         #Get Prediction of action to take
         Predictions = PyTorchNN.GetPredictions(GetStates(), model)
         #Turn action from list into controller input
-        TradeOff(Predictions)
+        Action = TradeOff(Predictions)
         #Push controller inputs to dolphin
         controller.flush()
         #Continue 1 frame
@@ -247,14 +276,35 @@ while True:
         ShortMemTrain(State0, Action, Reward, State1)
         Remember(State0, Action, Reward, State1)
         GamePlayed = True
+        Score += Reward
+        CharSelected = True
     else:
         #print(Fitness)
         if GamePlayed == True:
           NumberOfGames += 1
+          if Score > BestScore:
+            BestScore = Score
+          model.save()
+          Scores.append(Score)
+          TotalScore += Score
+          MeanScores.append(TotalScore/NumberOfGames)
+          #plot(Scores, MeanScores)
+          PlotObj = {"Scores":Scores, "MeanScores":MeanScores, "TotalScore": TotalScore, "NumberOfGames": NumberOfGames}
+          with open("Plotting/JsonPlot.json", 'w') as f:
+            json.dump(PlotObj, f)
+          Score = 0
           LongMemTrain()
+          GamePlayed = False
         gamestate = console.step()
-        melee.MenuHelper.menu_helper_simple(gamestate, controller, melee.Character.FOX, melee.Stage.YOSHIS_STORY, costume=costume, autostart=True, swag=False)
-        
+        if gamestate.menu_state in [melee.Menu.CHARACTER_SELECT]:
+          if CharSelected == False:
+            melee.MenuHelper.choose_character(gamestate=gamestate, controller=controller_opponent, cpu_level=9, start=False, character=melee.Character.FOX)
+          if gamestate.players[2].character_selected == melee.Character.FOX:
+            melee.MenuHelper.menu_helper_simple(gamestate, controller, melee.Character.FOX, melee.Stage.YOSHIS_STORY, costume=costume, autostart=True, swag=False, cpu_level=0)
+        else:
+          melee.MenuHelper.menu_helper_simple(gamestate, controller, melee.Character.FOX, melee.Stage.YOSHIS_STORY, costume=costume, autostart=True, swag=False, cpu_level=0)
+
+          
 
 
 

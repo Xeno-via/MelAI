@@ -5,7 +5,7 @@ import numpy as np
 import torch.optim as optim
 
 device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
-#print(f"Using {device} device")
+print(f"Using {device} device on NN")
 
 class NeuralNetwork(nn.Module):
     def __init__(self, input_size, hidden_size, output_size):
@@ -24,13 +24,15 @@ class NeuralNetwork(nn.Module):
         out = self.l3(out)
         return out
 
-    def save(self, filename='model.pth'):
+    def save(self, FileName='model.pth'):
         modelfolderpath = './model'
         if not os.path.exists(modelfolderpath):
             os.makedirs(modelfolderpath)
 
-        FileName = os.path.koin(modelfolderpath, FileName)
+        FileName = os.path.join(modelfolderpath, FileName)
         torch.save(self.state_dict(), FileName)
+
+
 
 class QTrain:
     def __init__(self, Model, LearningRate, Gamma):
@@ -44,33 +46,49 @@ class QTrain:
         State = torch.tensor(State, dtype=torch.float)
         NextState = torch.tensor(NextState, dtype=torch.float)
         Action = torch.tensor(Action, dtype=torch.int16)
-        Reward = torch.tensor(Reward, dtype=torch.float)
+        Reward = torch.tensor(Reward, dtype=torch.float) # Turn values into tensors
         if len(State.shape) == 1:
-            State = torch.unsqueeze(State, 0)
+            State = torch.unsqueeze(State, 0) # Do some dimention trickery
             NextState = torch.unsqueeze(NextState, 0)
             Action = torch.unsqueeze(Action, 0)
             Reward = torch.unsqueeze(Reward, 0)
-
-        Prediction = self.Model(State) # R + y * NextPredict Q Value
+        Prediction = GetPredictions(State, self.Model) # R + y * NextPredict Q Value
+        #print(State)
+        Prediction = torch.tensor(Prediction, dtype=torch.float)
         target = Prediction.clone()
-
         for i in range(len(State)):
-            QNew = Reward[i] + self.Gamma * torch.max(self.Model(NextState[i]))
+            #print(len(State.detach().numpy()))
+            #print(State)
+            QNew = Reward[i] + self.Gamma * torch.max(torch.tensor(GetPredictions(NextState[i], self.Model), dtype=torch.float))
+            #print(torch.argmax(Action).item())
             target[i][torch.argmax(Action).item()] = QNew
 
         self.Optimizer.zero_grad()
-        Loss = self.Criterion(target, Prediction)
+        Loss = self.Criterion(Prediction.detach(), target.detach())
+        Loss.requires_grad = True
         Loss.backward()
         self.Optimizer.step()
             
 
 
 
+def LoadModel(Path, Model):
+    Model.load_state_dict(torch.load(Path))
+    Model.eval()
+
+
 def GetPredictions(Inputs, model):
-    NewInputs = [np.float32(i) for i in Inputs]
-    NewInputs = torch.from_numpy(np.array(NewInputs)).to(device)
-    Predicts = model(NewInputs)
-    Predicts = Predicts.cpu()
-    Predicts = Predicts.detach().numpy()
+    Dims = np.ndim(Inputs)
+    if Dims == 1:
+        NewInputs = [np.float32(i) for i in Inputs]
+        NewInputs = torch.from_numpy(np.array(NewInputs)).to(device)
+        Predicts = model(NewInputs)
+        Predicts = Predicts.cpu()
+        Predicts = Predicts.detach().numpy()
+    else:
+        NewInputs = Inputs.clone()
+        NewInputs = NewInputs.to(device)
+        Predicts = model(NewInputs)
+        Predicts.cpu()
     return Predicts
 
