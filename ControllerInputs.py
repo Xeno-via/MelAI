@@ -278,8 +278,10 @@ while True:
         GamePlayed = True
         Score += Reward
         CharSelected = True
+        print(State0)
     else:
         #print(Fitness)
+        print("Game")
         if GamePlayed == True:
           NumberOfGames += 1
           if Score > BestScore:
