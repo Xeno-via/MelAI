@@ -3,6 +3,7 @@ import torch
 from torch import nn
 import numpy as np
 import torch.optim as optim
+from torch.distributions import Categorical
 
 device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
 print(f"Using {device} device on NN")
@@ -13,7 +14,8 @@ class NeuralNetwork(nn.Module):
         self.l1 = nn.Linear(input_size, hidden_size)
         self.relu = nn.ReLU()
         self.l2 = nn.Linear(hidden_size, hidden_size)
-        self.l3 = nn.Linear(hidden_size, output_size)
+        self.l3 = nn.Linear(hidden_size, hidden_size)
+        self.l4 = nn.Linear(hidden_size, output_size)
         
     
     def forward(self, x):
@@ -22,9 +24,13 @@ class NeuralNetwork(nn.Module):
         out = self.l2(out)
         out = self.relu(out)
         out = self.l3(out)
+        out = self.relu(out)
+        out = self.l4(out)
+        out = self.relu(out)
         return out
 
-    def save(self, FileName='model.pth'):
+
+    def save(self, FileName='reinforce5falcon.pth'):
         modelfolderpath = './model'
         if not os.path.exists(modelfolderpath):
             os.makedirs(modelfolderpath)
@@ -61,13 +67,46 @@ class QTrain:
             #print(State)
             QNew = Reward[i] + self.Gamma * torch.max(torch.tensor(GetPredictions(NextState[i], self.Model), dtype=torch.float))
             #print(torch.argmax(Action).item())
-            target[i][torch.argmax(Action).item()] = QNew
+            target[i][torch.argmax(Action[i]).item()] = QNew
 
         self.Optimizer.zero_grad()
         Loss = self.Criterion(Prediction.detach(), target.detach())
         Loss.requires_grad = True
         Loss.backward()
         self.Optimizer.step()
+
+
+class ReinforceTrainer:
+
+    def __init__(self, Model, Gamma):
+        self.Model = Model
+        self.Gamma = Gamma
+        self.Optimizer = optim.Adam(Model.parameters(), lr=0.1)
+
+    def reinforce(self, Model, Rewards, Probabilities):
+        Discounts = [self.Gamma ** i for i in range(len(Rewards) + 1)]
+        R = sum(a*b for a,b in zip(Discounts, Rewards))
+        #Probabilities = np.ndarray(Probabilities)
+        Probabilities = torch.tensor(Probabilities, dtype=torch.float)
+        
+        LogProbs = []
+        for i in range(1, len(Probabilities)):
+            Categorize = Categorical(Probabilities[i][:])
+            LogProbs.append(Categorize.log_prob(Categorize.sample()))
+
+        ModelLoss = []
+        for Probs in LogProbs:
+            ModelLoss.append(-Probs * R)
+        ModelLoss = torch.stack(ModelLoss).sum()
+
+        self.Optimizer.zero_grad()
+        ModelLoss.requires_grad = True
+        ModelLoss.backward()
+        self.Optimizer.step()
+    
+
+
+    
             
 
 

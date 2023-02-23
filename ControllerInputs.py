@@ -1,7 +1,6 @@
 from collections import deque
 from dis import disco
 import os
-from time import sleep
 import melee
 import numpy as np
 import argparse
@@ -13,37 +12,56 @@ import PyTorchNN
 from Plotting import plot
 import csv
 import json
+Temp = np.array([])
+PrevAction = 0
+RecordedActions = np.array([])
+PrevX = 0
+PrevY = 0
+DistanceSetup = False
+SetupDone = False
 BotStocks = 4 # To work out reward stuff
 OppStocks = 4
 BotPercent = 0
 OppPercent = 0
+PrevDistance = 0
 Scores = []
 MeanScores = []
 TotalScore = 0
-BestScore = 0
+BestScore = -99999999999999999999999
 Score = 0
 CharSelected = False
 device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
 print(f"Using {device} device on Agent")
-model = PyTorchNN.NeuralNetwork(13, 39, 30).to(device)
-PyTorchNN.LoadModel("model/model.pth", model)
-Trainer = PyTorchNN.QTrain(Model=model, LearningRate=0.001, Gamma=0.9) # Gamma < 1
+model = PyTorchNN.NeuralNetwork(13, 300, 30).to(device)
+if os.path.isfile('model/reinforce5falcon.pth'):
+  PyTorchNN.LoadModel("model/reinforce5falcon.pth", model)
+#Trainer = PyTorchNN.QTrain(Model=model, LearningRate=0.001, Gamma=0.9) # Gamma < 1
+Trainer = PyTorchNN.ReinforceTrainer(Model=model, Gamma=0.9)
 State0 = [] # to hold oldstate
 State1 = [] # To hold newstate
 NumberOfGames = 0 # Counter
 GamePlayed = False # For console.step stuff
 MaxMem = 100000 # MaxMem size for training
 BatchSize = 1000 # Max Batch size for longtermtrain
-TradeoffNum = 400 # Number of games to stop trying some random inputs
+TradeoffNum = 1000 # Number of games to stop trying some random inputs
 Memory = deque(maxlen=MaxMem) # Pops Left if MaxMem reached
 
-if os.path.isfile('Plotting/JsonPlot.json'):
-  with open('Plotting/JsonPlot.json') as f:
+if os.path.isfile('Plotting/Reinforce5Falcon.json'):
+  with open('Plotting/Reinforce5Falcon.json') as f:
     JsonObj = json.load(f)
   Scores = JsonObj["Scores"]
   MeanScores = JsonObj["MeanScores"]
   TotalScore = JsonObj["TotalScore"]
   NumberOfGames = JsonObj["NumberOfGames"]
+  BestScore = JsonObj["MaxScore"]
+  #RecordedActions = JsonObj["Actions"]
+
+
+def handler(signum, frame):
+  model.save()
+  exit(1)
+
+signal.signal(signal.SIGINT, handler)
 
 def Normalize(Min, X, Max):
   Normal = (X - Min) / (Max-Min)
@@ -59,7 +77,8 @@ def LongMemTrain():
     SelectionSample = Memory
   
   States, Actions, Rewards, NextStates = zip(*SelectionSample)
-  Trainer.TrainStep(States, Actions, Rewards, NextStates)
+  #Trainer.TrainStep(States, Actions, Rewards, NextStates)
+  Trainer.reinforce(Model=model, Rewards=Rewards, Probabilities=Actions)
 
 def ShortMemTrain(State, Action, Reward, NextState):
   Trainer.TrainStep(State, Action, Reward, NextState)
@@ -67,18 +86,22 @@ def ShortMemTrain(State, Action, Reward, NextState):
 def TradeOff(Predictions):
   Temp = [0] * 30 
   Action = 0
-  if random.randint(0, 200) < (TradeoffNum - NumberOfGames):
+  if random.randint(0, TradeoffNum) < (TradeoffNum - NumberOfGames):
     #print(random.randint(0,29))
     Temp[random.randint(0,29)] = 1
+    print("Random")
     Action = GetAction(Temp)
   else:
+    print("Bot")
     Action = GetAction(Predictions)
     Temp[Action] = 1
+  #print(Temp)
   return Temp
 
 def GetAction(Predictions): #Turns prediction into controller input
   Prediction = np.argmax(Predictions)
-  Action = np.int16(Prediction) + 1
+  Action = np.int16(Prediction)
+  #print(Action)
 
   match Action:
            case 1:
@@ -183,12 +206,20 @@ def GetAction(Predictions): #Turns prediction into controller input
   return Action  
 
 def GetStates():
+     InHitStunBot = 0
+     InHitStunOpp = 0
+     if gamestate.players[1].hitlag_left > 0:
+      InHitStunBot = 1
+     if gamestate.players[1].hitlag_left > 0:
+      InHitStunOpp = 1
+
+
      Inputs = [gamestate.players[1].facing, gamestate.players[2].facing,
-     gamestate.players[1].hitlag_left, gamestate.players[2].hitlag_left, 
+     InHitStunBot, InHitStunOpp, 
      gamestate.players[1].on_ground, gamestate.players[1].percent / 999, 
-     gamestate.players[2].percent / 999, Normalize(-175.7,gamestate.players[1].position.x, 173.6), 
-     Normalize(-91,gamestate.players[1].position.y, 168), Normalize(-175.7,gamestate.players[2].position.x, 173.6), # Need to normalise X and Y values
-     Normalize(-91,gamestate.players[2].position.y, 168), gamestate.players[1].stock / 4, 
+     gamestate.players[2].percent / 999, Normalize(-246,gamestate.players[1].position.x, 246), 
+     Normalize(-140,gamestate.players[1].position.y, 118), Normalize(-246,gamestate.players[2].position.x, 246), # Need to normalise X and Y values
+     Normalize(-140,gamestate.players[2].position.y, 118), gamestate.players[1].stock / 4, 
      gamestate.players[2].stock / 4]
      
      Inputs = [np.float32(i) for i in Inputs]
@@ -202,37 +233,54 @@ def check_port(value):
     return ivalue
 
 def CheckReward():
-  Reward = 0
+  NewReward = 0
   global BotStocks
   global BotPercent
   global OppStocks
   global OppPercent
+  global PrevDistance
+  global PrevX
+  global PrevY
+  global PrevAction
 
-  if gamestate.players[2].hitlag_left == True:
-      Reward += 0.01
+  if PrevAction == gamestate.players[1].action:
+    NewReward -= 0.0001
+  else:
+    NewReward += 0.001
 
-  if gamestate.players[2].off_stage == True:
-      Reward += 0.01
-     
+  PrevAction == gamestate.players[1].action
+
+  if (PrevX == gamestate.players[1].position.x or PrevY == gamestate.players[1].position.y):
+    NewReward -= (0.001)
+  else:
+    NewReward += 0.001
+
+  PrevX = gamestate.players[1].position.x
+  PrevY = gamestate.players[1].position.y
+
   if gamestate.players[2].percent > OppPercent:
-      Reward += (0.01 * (gamestate.players[2].percent - OppPercent) / 10)
+      NewReward += (0.01 * (gamestate.players[2].percent - OppPercent))
       OppPercent = gamestate.players[2].percent
 
   if gamestate.players[2].stock < OppStocks:
-      Reward += 10
+      NewReward += 1
       OppStocks = gamestate.players[2].stock
       OppPercent = 0
 
-  if gamestate.players[1].stock < BotStocks:
-      Reward -= 10
+  if (gamestate.players[1].stock < BotStocks) and gamestate.players[1].percent > 50:
+      NewReward -= 0.5
+      BotStocks = gamestate.players[1].stock
+      BotPercent = 0
+  elif (gamestate.players[1].stock < BotStocks) and gamestate.players[1].percent <= 10:
+      NewReward -= 1
       BotStocks = gamestate.players[1].stock
       BotPercent = 0
 
   if gamestate.players[1].percent > BotPercent:
-      Reward -= (0.01 * (gamestate.players[1].percent - BotPercent) / 10)
+      NewReward -= (0.01 * (gamestate.players[1].percent - BotPercent))
       BotPercent = gamestate.players[1].percent
 
-  return Reward
+  return NewReward
     
 
 
@@ -254,10 +302,13 @@ framedata = melee.framedata.FrameData()
 gamestate = console.step()
 while True:
     #gamestate = console.step()
-    if gamestate is None:
+  if gamestate is None:
         gamestate = console.step()
         continue
-    if gamestate.menu_state in [melee.Menu.IN_GAME, melee.Menu.SUDDEN_DEATH]:
+  if gamestate.menu_state in [melee.Menu.IN_GAME, melee.Menu.SUDDEN_DEATH]:
+        if DistanceSetup == False:
+          PrevDistance = abs(gamestate.players[1].position.x - gamestate.players[2].position.x)
+          DistanceSetup = True
         Reward = np.float32(CheckReward())
         controller.release_all()
         #Get Current State
@@ -273,38 +324,51 @@ while True:
         #Get New State
         State1 = GetStates()
 
-        ShortMemTrain(State0, Action, Reward, State1)
-        Remember(State0, Action, Reward, State1)
+        #ShortMemTrain(State0, Action, Reward, State1)
+        Remember(State0, Predictions, Reward, State1)
         GamePlayed = True
         Score += Reward
+        Temp = np.append(Temp, np.argmax(Action))
+        #print(Temp)
         CharSelected = True
-        print(State0)
-    else:
-        #print(Fitness)
-        print("Game")
+  else:
+        RecordedActions = np.append(RecordedActions, Temp, 0)
+        Temp = np.array([])
         if GamePlayed == True:
           NumberOfGames += 1
+          OppPercent = 0
+          BotPercent = 0
+          OppStocks = 4
+          BotStocks = 4
           if Score > BestScore:
             BestScore = Score
-          model.save()
+            model.save()
           Scores.append(Score)
           TotalScore += Score
           MeanScores.append(TotalScore/NumberOfGames)
           #plot(Scores, MeanScores)
-          PlotObj = {"Scores":Scores, "MeanScores":MeanScores, "TotalScore": TotalScore, "NumberOfGames": NumberOfGames}
-          with open("Plotting/JsonPlot.json", 'w') as f:
+          ActionTemp = RecordedActions.tolist()
+          PlotObj = {"Scores":Scores, "MeanScores":MeanScores, "TotalScore": TotalScore, "NumberOfGames": NumberOfGames, "MaxScore":BestScore}
+          with open("Plotting/Reinforce5Falcon.json", 'w') as f:
             json.dump(PlotObj, f)
           Score = 0
           LongMemTrain()
           GamePlayed = False
+          if gamestate.players[2].character_selected != melee.Character.MARTH:
+            CharSelected = False
         gamestate = console.step()
-        if gamestate.menu_state in [melee.Menu.CHARACTER_SELECT]:
-          if CharSelected == False:
-            melee.MenuHelper.choose_character(gamestate=gamestate, controller=controller_opponent, cpu_level=9, start=False, character=melee.Character.FOX)
-          if gamestate.players[2].character_selected == melee.Character.FOX:
-            melee.MenuHelper.menu_helper_simple(gamestate, controller, melee.Character.FOX, melee.Stage.YOSHIS_STORY, costume=costume, autostart=True, swag=False, cpu_level=0)
+        if SetupDone:
+          if gamestate.menu_state in [melee.Menu.CHARACTER_SELECT]:
+            if CharSelected == False:
+              melee.MenuHelper.choose_character(gamestate=gamestate, controller=controller_opponent, cpu_level=3, start=False, character=melee.Character.MARTH)
+            if gamestate.players[2].character_selected == melee.Character.MARTH:
+              melee.MenuHelper.menu_helper_simple(gamestate, controller, melee.Character.CPTFALCON, melee.Stage.FINAL_DESTINATION, costume=costume, autostart=True, swag=False, cpu_level=0)
+          else:
+            melee.MenuHelper.menu_helper_simple(gamestate, controller, melee.Character.CPTFALCON, melee.Stage.FINAL_DESTINATION, costume=costume, autostart=True, swag=False, cpu_level=0)
         else:
-          melee.MenuHelper.menu_helper_simple(gamestate, controller, melee.Character.FOX, melee.Stage.YOSHIS_STORY, costume=costume, autostart=True, swag=False, cpu_level=0)
+          if gamestate.menu_state == melee.Menu.CHARACTER_SELECT:
+            SetupDone = True
+          
 
           
 
