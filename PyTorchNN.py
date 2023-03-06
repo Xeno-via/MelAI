@@ -1,3 +1,4 @@
+import copy
 import os
 import torch
 from torch import nn
@@ -11,42 +12,104 @@ print(f"Using {device} device on NN")
 class NeuralNetwork(nn.Module):
     def __init__(self, input_size, hidden_size, output_size):
         super().__init__()
-        self.l1 = nn.Linear(input_size, hidden_size)
-        self.relu = nn.ReLU()
-        self.l2 = nn.Linear(hidden_size, hidden_size)
-        self.l3 = nn.Linear(hidden_size, hidden_size)
-        self.l4 = nn.Linear(hidden_size, output_size)
+        self.Model = nn.Sequential(
+            nn.Linear(input_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, output_size)
+        )
+        
         
     
-    def forward(self, x):
-        out = self.l1(x)
-        out = self.relu(out)
-        out = self.l2(out)
-        out = self.relu(out)
-        out = self.l3(out)
-        out = self.relu(out)
-        out = self.l4(out)
-        out = self.relu(out)
-        return out
+    def forward(self, input):
+        #input = input.to(device)
+        return self.Model(input)
+
+class QTrain:
+    def __init__(self,LearningRate, Gamma, FileName):
+        self.LearningRate = LearningRate
+        self.Gamma = Gamma
+        self.FileName = FileName
+        self.NN = NeuralNetwork(14, 250, 30).Model
+        self.NN.to(device)
+        self.Target = copy.deepcopy(self.NN)
+        self.Target.to(device)
+        for p in self.Target.parameters():
+            p.requires_grad = False
+        self.Optimizer = optim.Adam(self.NN.parameters(), lr=self.LearningRate)
+        self.Criterion = nn.MSELoss()
+        self.CurrentStep = 0
+        self.SaveEvery = 10
+        self.SyncEvery = 5
+        self.BatchSize = 1000
 
 
-    def save(self, FileName='reinforce5falcon.pth'):
+
+    def Converting(self, Tuple):
+        new = torch.stack(Tuple)
+        return new
+
+
+    def save(self, FileName):
         modelfolderpath = './model'
         if not os.path.exists(modelfolderpath):
             os.makedirs(modelfolderpath)
 
-        FileName = os.path.join(modelfolderpath, FileName)
-        torch.save(self.state_dict(), FileName)
+        FilePath = os.path.join(modelfolderpath, FileName + '.pth')
+        torch.save(self.NN.state_dict(), FilePath)
 
 
+    def LoadModel(self, Path):
+        self.NN.load_state_dict(torch.load(Path))
+        self.NN.eval()
+        self.Target = copy.deepcopy(self.NN).to(device)
+        for p in self.Target.parameters():
+            p.requires_grad = False
 
-class QTrain:
-    def __init__(self, Model, LearningRate, Gamma):
-        self.LearningRate = LearningRate
-        self.Gamma = Gamma
-        self.Model = Model
-        self.Optimizer = optim.Adam(Model.parameters(), lr=self.LearningRate)
-        self.Criterion = nn.MSELoss()
+    def TDEstimate(self, State, Action):
+        CurrentQ = self.NN(input=State.to(device))[np.arange(0, self.BatchSize), Action]
+        return CurrentQ.cpu()
+    
+    @torch.no_grad()
+    def TDTarget(self, Reward, NextState):
+        NextStateQ = self.NN(input=NextState.to(device))
+        BestAction = torch.argmax(NextStateQ, axis=1)
+        NextQ = self.Target(input=NextState.to(device))[np.arange(0, self.BatchSize), BestAction]
+        return (Reward + self.Gamma * NextQ.cpu()).float()
+
+    def UpdateQModel(self, TDEstimate, TDTarget):
+        Loss = self.Criterion(TDEstimate, TDTarget)
+        self.Optimizer.zero_grad()
+        Loss.backward()
+        self.Optimizer.step()
+        return Loss.item()
+    
+    def SyncTarget(self):
+        self.Target.load_state_dict(self.NN.state_dict())
+
+
+    def Train(self, State, NextState, Action, Reward):
+        State = self.Converting(State)
+        NextState = self.Converting(NextState)
+        Action = torch.from_numpy(np.asarray(Action))
+        Reward = torch.from_numpy(np.asarray(Reward))
+
+        if self.CurrentStep % self.SyncEvery == 0:
+            print("Synced")
+            self.SyncTarget()
+        
+        if self.CurrentStep % self.SaveEvery ==0:
+            self.save(self.FileName)
+
+        
+        TDEst = self.TDEstimate(State, Action)
+        TDTarget = self.TDTarget(Reward, NextState)
+        Loss = self.UpdateQModel(TDEst, TDTarget)
+        self.CurrentStep += 1
+
 
     def TrainStep(self, State, Action, Reward, NextState):
         State = torch.tensor(State, dtype=torch.float)
@@ -59,13 +122,14 @@ class QTrain:
             Action = torch.unsqueeze(Action, 0)
             Reward = torch.unsqueeze(Reward, 0)
         Prediction = GetPredictions(State, self.Model) # R + y * NextPredict Q Value
-        #print(State)
         Prediction = torch.tensor(Prediction, dtype=torch.float)
+        Target = GetPredictions(NextState, self.Target)
+        Target = torch.tensor(Target, dtype=torch.float)
         target = Prediction.clone()
         for i in range(len(State)):
             #print(len(State.detach().numpy()))
             #print(State)
-            QNew = Reward[i] + self.Gamma * torch.max(torch.tensor(GetPredictions(NextState[i], self.Model), dtype=torch.float))
+            TDTarget = Reward[i] + self.Gamma * torch.max(torch.tensor(GetPredictions(NextState[i], self.Model), dtype=torch.float))
             #print(torch.argmax(Action).item())
             target[i][torch.argmax(Action[i]).item()] = QNew
 
@@ -81,7 +145,7 @@ class ReinforceTrainer:
     def __init__(self, Model, Gamma):
         self.Model = Model
         self.Gamma = Gamma
-        self.Optimizer = optim.Adam(Model.parameters(), lr=0.1)
+        self.Optimizer = optim.Adam(Model.parameters(), lr=0.01)
 
     def reinforce(self, Model, Rewards, Probabilities):
         Discounts = [self.Gamma ** i for i in range(len(Rewards) + 1)]
@@ -107,13 +171,7 @@ class ReinforceTrainer:
 
 
     
-            
 
-
-
-def LoadModel(Path, Model):
-    Model.load_state_dict(torch.load(Path))
-    Model.eval()
 
 
 def GetPredictions(Inputs, model):
@@ -121,13 +179,13 @@ def GetPredictions(Inputs, model):
     if Dims == 1:
         NewInputs = [np.float32(i) for i in Inputs]
         NewInputs = torch.from_numpy(np.array(NewInputs)).to(device)
-        Predicts = model(NewInputs)
+        Predicts = model(NewInputs, model)
         Predicts = Predicts.cpu()
         Predicts = Predicts.detach().numpy()
     else:
         NewInputs = Inputs.clone()
         NewInputs = NewInputs.to(device)
-        Predicts = model(NewInputs)
+        Predicts = model(NewInputs, model)
         Predicts.cpu()
     return Predicts
 

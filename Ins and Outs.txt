@@ -12,38 +12,39 @@ Inputs:
     PositionY (opponent)
     Stock (bot)
     Stock (opponent)
+    IsActionable?
 
 Outputs:
-    Left
-    Right
-    Up
-    Down
-    Left-Up
-    Right-Up
-    Left-Down
-    Right-Down
-    Neutral
-    A 
-    B
-    Y
-    L 
-    R
-    Z
-    L+A
-    L+B
-    L+R 
-    R+A
-    R+B
-    R+R 
-    U+A
-    U+B
-    D+A
-    D+B
-    D+R 
-    SmashL
-    SmashR
-    SmashD
-    SmashU
+    1 Left
+    2 Right
+    3 Up
+    4 Down
+    5 Left-Up
+    6 Right-Up
+    7 Left-Down
+    8 Right-Down
+    9 Neutral
+    10 A 
+    11 B
+    12 Y
+    13 L 
+    14 R
+    15 Z
+    16 L+A
+    17 L+B
+    18 L+R 
+    19 R+A
+    20 R+B
+    21 R+R 
+    22 U+A
+    23 U+B
+    24 D+A
+    25 D+B
+    26 D+R 
+    27 SmashL
+    28 SmashR
+    29 SmashD
+    30SmashU
     
 
 

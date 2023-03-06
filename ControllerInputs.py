@@ -12,97 +12,111 @@ import PyTorchNN
 from Plotting import plot
 import csv
 import json
-Temp = np.array([])
-PrevAction = 0
-RecordedActions = np.array([])
-PrevX = 0
-PrevY = 0
-DistanceSetup = False
+import time
+StatesSetup = False
+X = 0
 SetupDone = False
-BotStocks = 4 # To work out reward stuff
-OppStocks = 4
-BotPercent = 0
-OppPercent = 0
-PrevDistance = 0
-Scores = []
-MeanScores = []
-TotalScore = 0
-BestScore = -99999999999999999999999
-Score = 0
 CharSelected = False
-device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
-print(f"Using {device} device on Agent")
-model = PyTorchNN.NeuralNetwork(13, 300, 30).to(device)
-if os.path.isfile('model/reinforce5falcon.pth'):
-  PyTorchNN.LoadModel("model/reinforce5falcon.pth", model)
-#Trainer = PyTorchNN.QTrain(Model=model, LearningRate=0.001, Gamma=0.9) # Gamma < 1
-Trainer = PyTorchNN.ReinforceTrainer(Model=model, Gamma=0.9)
-State0 = [] # to hold oldstate
-State1 = [] # To hold newstate
-NumberOfGames = 0 # Counter
 GamePlayed = False # For console.step stuff
 MaxMem = 100000 # MaxMem size for training
 BatchSize = 1000 # Max Batch size for longtermtrain
 TradeoffNum = 1000 # Number of games to stop trying some random inputs
 Memory = deque(maxlen=MaxMem) # Pops Left if MaxMem reached
-
-if os.path.isfile('Plotting/Reinforce5Falcon.json'):
-  with open('Plotting/Reinforce5Falcon.json') as f:
-    JsonObj = json.load(f)
-  Scores = JsonObj["Scores"]
-  MeanScores = JsonObj["MeanScores"]
-  TotalScore = JsonObj["TotalScore"]
-  NumberOfGames = JsonObj["NumberOfGames"]
-  BestScore = JsonObj["MaxScore"]
-  #RecordedActions = JsonObj["Actions"]
+FileName = "UhhhIdkAnyMore"
 
 
-def handler(signum, frame):
-  model.save()
+def StateSetup():
+  global BotStocks
+  global BotPercent
+  global OppStocks
+  global OppPercent
+  global PrevX
+  global PrevY
+  global PrevAction
+  global Score
+  BotStocks = 4
+  OppStocks = 4
+  BotPercent = 0
+  OppPercent = 0
+  PrevX = gamestate.players[1].position.x
+  PrevY = gamestate.players[1].position.y
+  PrevAction = 0
+  Score = 0
+
+def NNSetup(FileName):
+  global device
+  global model
+  global Trainer
+  device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
+  print(f"Using {device} device on Agent")
+  #model = PyTorchNN.NeuralNetwork(13, 300, 30).to(device)
+  Trainer = PyTorchNN.QTrain(LearningRate=0.001, Gamma=0.9, FileName=FileName) # Gamma < 1
+  if os.path.isfile('model/' + FileName + '.pth'):
+    Trainer.LoadModel(Path="model/" + FileName + '.pth')
+  #Trainer = PyTorchNN.ReinforceTrainer(Model=model, Gamma=0.9)
+
+def JsonLoading(FileName):
+  global Scores
+  global MeanScores
+  global TotalScore
+  global NumberOfGames
+  global BestScore
+  global RecordedActions
+  if os.path.isfile('Plotting/' + FileName + '.json'): # Checks which JsonFile to use for data storage
+    with open('Plotting/' + FileName + '.json') as f:
+      JsonObj = json.load(f)
+    Scores = JsonObj["Scores"]
+    MeanScores = JsonObj["MeanScores"]
+    TotalScore = JsonObj["TotalScore"]
+    NumberOfGames = JsonObj["NumberOfGames"]
+    BestScore = JsonObj["MaxScore"]
+    #RecordedActions = JsonObj["Actions"]
+  else:
+    Scores = []
+    MeanScores = []
+    TotalScore = 0
+    NumberOfGames = 0
+    BestScore = -999999999999999999
+
+def handler(signum, frame): # To handle Ctrl + C Exiting
+  #model.save()
   exit(1)
 
-signal.signal(signal.SIGINT, handler)
-
-def Normalize(Min, X, Max):
+def Normalize(Min, X, Max): # To Normalise Values
   Normal = (X - Min) / (Max-Min)
   return Normal
 
-def Remember(State, Action, Reward, NextState):
+def Remember(State, Action, Reward, NextState): # For putting things into Memory
   Memory.append((State, Action, Reward, NextState))
 
-def LongMemTrain():
+def LongMemTrain(): # Uses Memory to keep the last 100000 states, then batches them into Samples to be learnt by the reinforcement agent, bit different now considering no longer using QTrain
   if len(Memory) > BatchSize: # Gets selection of memory to use for training that is the batchsize
     SelectionSample = random.sample(Memory, BatchSize) # List of Tuples
   else:
     SelectionSample = Memory
   
   States, Actions, Rewards, NextStates = zip(*SelectionSample)
-  #Trainer.TrainStep(States, Actions, Rewards, NextStates)
-  Trainer.reinforce(Model=model, Rewards=Rewards, Probabilities=Actions)
+  Trainer.Train(States, NextStates, Actions, Rewards)
+  #Trainer.reinforce(Model=model, Rewards=Rewards, Probabilities=Actions)
 
-def ShortMemTrain(State, Action, Reward, NextState):
-  Trainer.TrainStep(State, Action, Reward, NextState)
+def ShortMemTrain(State, Action, Reward, NextState): # Leftover from QTraining
+  Trainer.Train(State, NextState, Action, Reward)
 
-def TradeOff(Predictions):
+def TradeOff(State0): # Takes in the predictions and
   Temp = [0] * 30 
   Action = 0
-  if random.randint(0, TradeoffNum) < (TradeoffNum - NumberOfGames):
-    #print(random.randint(0,29))
+  if random.randint(0, TradeoffNum) < (TradeoffNum - NumberOfGames): # Performs a random action ((TradeoffNum - NumberOfGames) / 100) % of the time, and the bot action (100 - (TradeoffNum - NumberOfGames) / 100)) %of the time
     Temp[random.randint(0,29)] = 1
-    print("Random")
     Action = GetAction(Temp)
   else:
-    print("Bot")
+    Predictions = Trainer.NN(input=State0.to(device)).cpu().detach() 
     Action = GetAction(Predictions)
-    Temp[Action] = 1
-  #print(Temp)
-  return Temp
+    print(Action)
+  return Action
 
 def GetAction(Predictions): #Turns prediction into controller input
   Prediction = np.argmax(Predictions)
-  Action = np.int16(Prediction)
-  #print(Action)
-
+  Action = np.int16(Prediction + 1)
   match Action:
            case 1:
              controller.tilt_analog(melee.enums.Button.BUTTON_MAIN, 0.25, 0.5)
@@ -203,26 +217,30 @@ def GetAction(Predictions): #Turns prediction into controller input
              controller.press_button(melee.enums.Button.BUTTON_A)
              controller.tilt_analog(melee.enums.Button.BUTTON_MAIN, 0.5, 0)
              #SmashD
-  return Action  
+  return Action-1  
 
 def GetStates():
      InHitStunBot = 0
      InHitStunOpp = 0
-     if gamestate.players[1].hitlag_left > 0:
+     Actionable = 0
+     if gamestate.players[1].hitlag_left > 0: # Calculate if the bot or opponent is in hitlag, if so, it sets the value to true for the input into the NN
       InHitStunBot = 1
      if gamestate.players[1].hitlag_left > 0:
-      InHitStunOpp = 1
+      InHitStunOpp = 1#
+     if gamestate.players[1].action == melee.enums.Action.STANDING or gamestate.players[1].action == melee.enums.Action.CROUCHING:
+       Actionable = 1
 
 
-     Inputs = [gamestate.players[1].facing, gamestate.players[2].facing,
+     Inputs = [gamestate.players[1].facing, gamestate.players[2].facing, # NN Inputs, in the same order as on the Ins and Outs.txt
      InHitStunBot, InHitStunOpp, 
      gamestate.players[1].on_ground, gamestate.players[1].percent / 999, 
      gamestate.players[2].percent / 999, Normalize(-246,gamestate.players[1].position.x, 246), 
-     Normalize(-140,gamestate.players[1].position.y, 118), Normalize(-246,gamestate.players[2].position.x, 246), # Need to normalise X and Y values
+     Normalize(-140,gamestate.players[1].position.y, 118), Normalize(-246,gamestate.players[2].position.x, 246),
      Normalize(-140,gamestate.players[2].position.y, 118), gamestate.players[1].stock / 4, 
-     gamestate.players[2].stock / 4]
+     gamestate.players[2].stock / 4, Actionable]
      
      Inputs = [np.float32(i) for i in Inputs]
+     Inputs = torch.tensor(Inputs, dtype=torch.float)
      return Inputs
 
 def check_port(value):
@@ -232,73 +250,129 @@ def check_port(value):
                                          Must be 1, 2, 3, or 4." % value)
     return ivalue
 
-def CheckReward():
+def CheckDeath(): # Checks if either character has died and gives rewards / punishments depending
   NewReward = 0
   global BotStocks
   global BotPercent
   global OppStocks
   global OppPercent
-  global PrevDistance
-  global PrevX
-  global PrevY
-  global PrevAction
-
-  if PrevAction == gamestate.players[1].action:
-    NewReward -= 0.0001
-  else:
-    NewReward += 0.001
-
-  PrevAction == gamestate.players[1].action
-
-  if (PrevX == gamestate.players[1].position.x or PrevY == gamestate.players[1].position.y):
-    NewReward -= (0.001)
-  else:
-    NewReward += 0.001
-
-  PrevX = gamestate.players[1].position.x
-  PrevY = gamestate.players[1].position.y
-
-  if gamestate.players[2].percent > OppPercent:
-      NewReward += (0.01 * (gamestate.players[2].percent - OppPercent))
-      OppPercent = gamestate.players[2].percent
 
   if gamestate.players[2].stock < OppStocks:
-      NewReward += 1
+      NewReward += 10
       OppStocks = gamestate.players[2].stock
       OppPercent = 0
 
-  if (gamestate.players[1].stock < BotStocks) and gamestate.players[1].percent > 50:
-      NewReward -= 0.5
+  if (gamestate.players[1].stock < BotStocks) and gamestate.players[1].percent > 50: # If the bot dies with above 50% hp, don't punish as hard, as it "tried to live"
+      NewReward -= 5
       BotStocks = gamestate.players[1].stock
+      #print(gamestate.player[1].percent)
       BotPercent = 0
   elif (gamestate.players[1].stock < BotStocks) and gamestate.players[1].percent <= 10:
-      NewReward -= 1
+      NewReward -= 10
+      #print(gamestate.player[1].percent)
       BotStocks = gamestate.players[1].stock
       BotPercent = 0
 
+  return NewReward
+
+def CheckPercentChange(): # Detect if the bot has done any damage to the opponent, reward accordingly
+  NewReward = 0
+  global BotPercent
+  global OppPercent
+  if gamestate.players[2].percent > OppPercent:
+      NewReward += (0.1 * (gamestate.players[2].percent - OppPercent))
+      OppPercent = gamestate.players[2].percent
+
   if gamestate.players[1].percent > BotPercent:
-      NewReward -= (0.01 * (gamestate.players[1].percent - BotPercent))
+      NewReward -= (0.1 * (gamestate.players[1].percent - BotPercent))
       BotPercent = gamestate.players[1].percent
 
   return NewReward
-    
+
+def CheckReward(Action):
+  global PrevAction
+  global PrevX
+  global PrevY
+  NewReward = 0
+
+  NewReward += CheckDeath()
+  NewReward += CheckPercentChange()
+
+  # if PrevAction == np.argmax(Action): # Check if bot performs the same action over and over again
+  #   NewReward -= 0.0001
+  # else:
+  #   NewReward += 0.0001
+
+  # PrevAction == np.argmax(Action)
+
+  # if (PrevX == gamestate.players[1].position.x or PrevY == gamestate.players[1].position.y): # Check if the bot is staying still, punish it if so
+  #   NewReward -= (0.001)
+  # else:
+  #   NewReward += 0.001
+
+  # PrevX = gamestate.players[1].position.x
+  # PrevY = gamestate.players[1].position.y
+
+  return NewReward
+
+def LibmeleeSetup():
+  global console
+  global controller
+  global controller_opponent
+  global costume
+  parser = argparse.ArgumentParser(description='Libmelee in action')
+  parser.add_argument('--dolphin_executable_path', '-e', default=None, help='The directory where dolphin is')
+  parser.add_argument('--connect_code', '-t', default="", help='Direct connect code to connect to in Slippi Online')
+  args = parser.parse_args()
+
+  console = melee.Console(path=args.dolphin_executable_path, blocking_input=True, online_delay=0)
+  controller = melee.Controller(console=console, port=1, type=melee.ControllerType.STANDARD)
+  controller_opponent = melee.Controller(console=console, port=2, type=melee.ControllerType.STANDARD)
+  console.run()
+  console.connect()
+  controller.connect()
+  controller_opponent.connect()
+  costume = 1
+
+def SetupVariables():
+  global GamePlayed
+  global CharSelected
+  CharSelected = True
+  GamePlayed = True
+
+def JsonWrite(FileName):
+  global OppPercent
+  global BotPercent
+  global OppStocks
+  global BotStocks
+  global NumberOfGames
+  global Score
+  global BestScore
+  global TotalScore
+  global Scores
+  global MeanScores
+  NumberOfGames += 1
+  OppPercent = 0
+  BotPercent = 0
+  OppStocks = 4
+  BotStocks = 4
+  if Score > BestScore:
+    BestScore = Score
+  Trainer.save(FileName=(FileName))
+  Scores.append(Score)
+  TotalScore += Score
+  MeanScores.append(TotalScore/NumberOfGames)
+  #ActionTemp = RecordedActions.tolist()
+  PlotObj = {"Scores":Scores, "MeanScores":MeanScores, "TotalScore": TotalScore, "NumberOfGames": NumberOfGames, "MaxScore":BestScore}
+  with open("Plotting/"+ FileName + ".json", 'w') as f:
+    json.dump(PlotObj, f)
+  Score = 0
 
 
-parser = argparse.ArgumentParser(description='Libmelee in action')
-parser.add_argument('--dolphin_executable_path', '-e', default=None, help='The directory where dolphin is')
-parser.add_argument('--connect_code', '-t', default="", help='Direct connect code to connect to in Slippi Online')
-args = parser.parse_args()
-
-console = melee.Console(path=args.dolphin_executable_path)
-controller = melee.Controller(console=console, port=1, type=melee.ControllerType.STANDARD)
-controller_opponent = melee.Controller(console=console, port=2, type=melee.ControllerType.STANDARD)
-console.run()
-console.connect()
-controller.connect()
-controller_opponent.connect()
-costume = 1
-framedata = melee.framedata.FrameData()
-
+JsonLoading(FileName=FileName)
+NNSetup(FileName=FileName)
+LibmeleeSetup()
+signal.signal(signal.SIGINT, handler)
 gamestate = console.step()
 while True:
     #gamestate = console.step()
@@ -306,65 +380,45 @@ while True:
         gamestate = console.step()
         continue
   if gamestate.menu_state in [melee.Menu.IN_GAME, melee.Menu.SUDDEN_DEATH]:
-        if DistanceSetup == False:
-          PrevDistance = abs(gamestate.players[1].position.x - gamestate.players[2].position.x)
-          DistanceSetup = True
-        Reward = np.float32(CheckReward())
+      if gamestate.frame >=0:
+        if StatesSetup == False:
+          StateSetup()
+          StatesSetup = True    
         controller.release_all()
-        #Get Current State
-        State0 = GetStates()
-        #Get Prediction of action to take
-        Predictions = PyTorchNN.GetPredictions(GetStates(), model)
-        #Turn action from list into controller input
-        Action = TradeOff(Predictions)
-        #Push controller inputs to dolphin
-        controller.flush()
-        #Continue 1 frame
-        gamestate = console.step()
-        #Get New State
-        State1 = GetStates()
-
+        #melee.techskill.multishine(ai_state=gamestate.players[1], controller=controller)
+        State0 = GetStates() #Get Current State #Get Prediction of action to take
+        Action = TradeOff(State0)#Turn action from list into controller input and Calculate exploration vs exploitation
+        gamestate = console.step() #Continue 1 frame#
+        Reward = np.float32(CheckReward(Action)) # Calculate Reward
+        State1 = GetStates()#Get New State  
+        #print(Reward)
+        Remember(State0, Action, Reward, State1)
         #ShortMemTrain(State0, Action, Reward, State1)
-        Remember(State0, Predictions, Reward, State1)
-        GamePlayed = True
         Score += Reward
-        Temp = np.append(Temp, np.argmax(Action))
-        #print(Temp)
-        CharSelected = True
+        #Temp = np.append(Temp, np.argmax(Action))
+        SetupVariables()
+      else:
+        gamestate = console.step()
   else:
-        RecordedActions = np.append(RecordedActions, Temp, 0)
+        #RecordedActions = np.append(RecordedActions, Temp, 0)
         Temp = np.array([])
         if GamePlayed == True:
-          NumberOfGames += 1
-          OppPercent = 0
-          BotPercent = 0
-          OppStocks = 4
-          BotStocks = 4
-          if Score > BestScore:
-            BestScore = Score
-            model.save()
-          Scores.append(Score)
-          TotalScore += Score
-          MeanScores.append(TotalScore/NumberOfGames)
-          #plot(Scores, MeanScores)
-          ActionTemp = RecordedActions.tolist()
-          PlotObj = {"Scores":Scores, "MeanScores":MeanScores, "TotalScore": TotalScore, "NumberOfGames": NumberOfGames, "MaxScore":BestScore}
-          with open("Plotting/Reinforce5Falcon.json", 'w') as f:
-            json.dump(PlotObj, f)
-          Score = 0
+          JsonWrite(FileName=FileName)
           LongMemTrain()
           GamePlayed = False
-          if gamestate.players[2].character_selected != melee.Character.MARTH:
+          if gamestate.players[2].character_selected != melee.Character.MARTH or gamestate.players[2].cpu_level !=9:
             CharSelected = False
         gamestate = console.step()
         if SetupDone:
           if gamestate.menu_state in [melee.Menu.CHARACTER_SELECT]:
             if CharSelected == False:
-              melee.MenuHelper.choose_character(gamestate=gamestate, controller=controller_opponent, cpu_level=3, start=False, character=melee.Character.MARTH)
-            if gamestate.players[2].character_selected == melee.Character.MARTH:
+              #melee.MenuHelper.menu_helper_simple(gamestate, controller_opponent, melee.Character.MARTH, melee.Stage.FINAL_DESTINATION, costume=costume, autostart=True, swag=False, cpu_level=9)
+              pass
+            if (gamestate.players[2].character_selected == melee.Character.MARTH) and (gamestate.players[2].cpu_level == 9):
               melee.MenuHelper.menu_helper_simple(gamestate, controller, melee.Character.CPTFALCON, melee.Stage.FINAL_DESTINATION, costume=costume, autostart=True, swag=False, cpu_level=0)
+              #print("Yee")
           else:
-            melee.MenuHelper.menu_helper_simple(gamestate, controller, melee.Character.CPTFALCON, melee.Stage.FINAL_DESTINATION, costume=costume, autostart=True, swag=False, cpu_level=0)
+            melee.MenuHelper.menu_helper_simple(gamestate, controller_opponent, melee.Character.MARTH, melee.Stage.FINAL_DESTINATION, costume=costume, autostart=True, swag=False, cpu_level=9)
         else:
           if gamestate.menu_state == melee.Menu.CHARACTER_SELECT:
             SetupDone = True
