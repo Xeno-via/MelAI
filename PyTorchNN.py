@@ -19,6 +19,10 @@ class NeuralNetwork(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_size, hidden_size),
             nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
             nn.Linear(hidden_size, output_size)
         )
         
@@ -33,18 +37,18 @@ class QTrain:
         self.LearningRate = LearningRate
         self.Gamma = Gamma
         self.FileName = FileName
-        self.NN = NeuralNetwork(14, 250, 30).Model
+        self.NN = NeuralNetwork(14, 50, 30).Model
         self.NN.to(device)
         self.Target = copy.deepcopy(self.NN)
         self.Target.to(device)
         for p in self.Target.parameters():
             p.requires_grad = False
         self.Optimizer = optim.Adam(self.NN.parameters(), lr=self.LearningRate)
-        self.Criterion = nn.MSELoss()
+        self.Criterion = nn.SmoothL1Loss()
         self.CurrentStep = 0
-        self.SaveEvery = 10
-        self.SyncEvery = 5
-        self.BatchSize = 1000
+        self.SaveEvery = 1000
+        self.SyncEvery = 1000
+        self.BatchSize = 32
 
 
 
@@ -74,11 +78,11 @@ class QTrain:
         return CurrentQ.cpu()
     
     @torch.no_grad()
-    def TDTarget(self, Reward, NextState):
+    def TDTarget(self, Reward, NextState, Done):
         NextStateQ = self.NN(input=NextState.to(device))
         BestAction = torch.argmax(NextStateQ, axis=1)
         NextQ = self.Target(input=NextState.to(device))[np.arange(0, self.BatchSize), BestAction]
-        return (Reward + self.Gamma * NextQ.cpu()).float()
+        return (Reward + (1-Done.float())*self.Gamma * NextQ.cpu()).float()
 
     def UpdateQModel(self, TDEstimate, TDTarget):
         Loss = self.Criterion(TDEstimate, TDTarget)
@@ -91,22 +95,24 @@ class QTrain:
         self.Target.load_state_dict(self.NN.state_dict())
 
 
-    def Train(self, State, NextState, Action, Reward):
+    def Train(self, State, NextState, Action, Reward, Done):
         State = self.Converting(State)
         NextState = self.Converting(NextState)
         Action = torch.from_numpy(np.asarray(Action))
         Reward = torch.from_numpy(np.asarray(Reward))
+        Done = torch.from_numpy(np.asarray(Done))
 
         if self.CurrentStep % self.SyncEvery == 0:
             print("Synced")
             self.SyncTarget()
         
         if self.CurrentStep % self.SaveEvery ==0:
+            print("Saved")
             self.save(self.FileName)
 
         
         TDEst = self.TDEstimate(State, Action)
-        TDTarget = self.TDTarget(Reward, NextState)
+        TDTarget = self.TDTarget(Reward, NextState, Done)
         Loss = self.UpdateQModel(TDEst, TDTarget)
         self.CurrentStep += 1
 
