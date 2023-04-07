@@ -20,9 +20,10 @@ CharSelected = False
 GamePlayed = False # For console.step stuff
 MaxMem = 100000 # MaxMem size for training
 BatchSize = 32 # Max Batch size for longtermtrain
-TradeoffNum = 1000 # Number of games to stop trying some random inputs
+TradeoffNum = 5000 # Number of games to stop trying some random inputs
 Memory = deque(maxlen=MaxMem) # Pops Left if MaxMem reached
-FileName = "TrainingEachFrame"
+FileName = "OnlyPunishOnDeath5k3Hidden40HiddenNode"
+
 
 
 def StateSetup():
@@ -61,7 +62,12 @@ def JsonLoading(FileName):
   global TotalScore
   global NumberOfGames
   global BestScore
-  global RecordedActions
+  global q
+  global Loss
+  global Tempq
+  global TempLoss
+  Tempq = []
+  TempLoss = []
   if os.path.isfile('Plotting/' + FileName + '.json'): # Checks which JsonFile to use for data storage
     with open('Plotting/' + FileName + '.json') as f:
       JsonObj = json.load(f)
@@ -70,14 +76,17 @@ def JsonLoading(FileName):
     TotalScore = JsonObj["TotalScore"]
     NumberOfGames = JsonObj["NumberOfGames"]
     BestScore = JsonObj["MaxScore"]
-    #RecordedActions = JsonObj["Actions"]
+    q = JsonObj["AVGQ"]
+    Loss = JsonObj["AVGLoss"]
   else:
     Scores = []
     MeanScores = []
     TotalScore = 0
     NumberOfGames = 0
     BestScore = -999999999999999999
-
+    q = []
+    Loss = []
+    
 def handler(signum, frame): # To handle Ctrl + C Exiting
   #model.save()
   exit(1)
@@ -90,14 +99,16 @@ def Remember(State, Action, Reward, NextState, Done): # For putting things into 
   Memory.append((State, Action, Reward, NextState, Done))
 
 def LongMemTrain(): # Uses Memory to keep the last 100000 states, then batches them into Samples to be learnt by the reinforcement agent, bit different now considering no longer using QTrain
+  global Tempq
+  global TempLoss
   if len(Memory) > BatchSize: # Gets selection of memory to use for training that is the batchsize
     SelectionSample = random.sample(Memory, BatchSize) # List of Tuples
     States, Actions, Rewards, NextStates, Done = zip(*SelectionSample)
-    Trainer.Train(States, NextStates, Actions, Rewards, Done)
+    TempFrameQ, TempFrameLoss = Trainer.Train(States, NextStates, Actions, Rewards, Done)
+    Tempq.append(TempFrameQ)
+    TempLoss.append(TempFrameLoss)
   else:
-    pass
-    #SelectionSample = Memory
-  #Trainer.reinforce(Model=model, Rewards=Rewards, Probabilities=Actions)
+   pass
 
 def ShortMemTrain(State, Action, Reward, NextState): # Leftover from QTraining
   Trainer.Train(State, NextState, Action, Reward)
@@ -256,7 +267,7 @@ def GetStates():
      if gamestate.players[1].hitlag_left > 0: # Calculate if the bot or opponent is in hitlag, if so, it sets the value to true for the input into the NN
       InHitStunBot = 1
      if gamestate.players[1].hitlag_left > 0:
-      InHitStunOpp = 1#
+      InHitStunOpp = 1
      if gamestate.players[1].action == melee.enums.Action.STANDING or gamestate.players[1].action == melee.enums.Action.CROUCHING:
        Actionable = 1
 
@@ -292,6 +303,10 @@ def CheckDeath(): # Checks if either character has died and gives rewards / puni
       OppStocks = gamestate.players[2].stock
       OppPercent = 0
 
+  if (gamestate.players[1].stock < BotStocks) and not(gamestate.players[1].stock == 0 and gamestate.players[2].stock == 0): #At the end of the game, the system reports both having 0 stocks, giving the bot a +10 for losing, this stops that
+      NewReward -= 10
+      BotStocks = gamestate.players[1].stock
+      BotPercent = 0
   # if (gamestate.players[1].stock < BotStocks) and gamestate.players[1].percent > 50: # If the bot dies with above 50% hp, don't punish as hard, as it "tried to live"
   #     NewReward -= 5
   #     BotStocks = gamestate.players[1].stock
@@ -381,11 +396,19 @@ def JsonWrite(FileName):
   global TotalScore
   global Scores
   global MeanScores
+  global q
+  global Loss
+  global Tempq
+  global TempLoss
   NumberOfGames += 1
   OppPercent = 0
   BotPercent = 0
   OppStocks = 4
   BotStocks = 4
+  q.append(np.average(Tempq))
+  Loss.append(np.average(TempLoss))
+  Tempq = []
+  TempLoss = []
   if Score > BestScore:
     BestScore = Score
   Trainer.save(FileName=(FileName))
@@ -393,11 +416,37 @@ def JsonWrite(FileName):
   TotalScore += Score
   MeanScores.append(TotalScore/NumberOfGames)
   #ActionTemp = RecordedActions.tolist()
-  PlotObj = {"Scores":Scores, "MeanScores":MeanScores, "TotalScore": TotalScore, "NumberOfGames": NumberOfGames, "MaxScore":BestScore}
+  PlotObj = {"Scores": Scores, "MeanScores": MeanScores, "AVGQ": q, "AVGLoss": Loss,"TotalScore": TotalScore, "NumberOfGames": NumberOfGames, "MaxScore": BestScore}
   with open("Plotting/"+ FileName + ".json", 'w') as f:
     json.dump(PlotObj, f)
   Score = 0
 
+
+# def EvolutionTrainer(): # Carry over from Evolutionary Approach
+#   pass
+#   Counter = 0
+#   Generating = 1
+#   Population = []
+#   NewPopulation = []
+#   while Counter <= 999:
+#     Population.append(PyTorchNN.NeuralNetwork(14, 30, 30))
+#   Population.sort()
+#   Parents = Population[0:99]
+#   NewPopulation.append(Parents)
+#   while Generating <= 10: #Generate OffSpring
+#     for Index, Parent in enumerate(Parents[0:98]):
+#       TempWeights = Parent.fc.weight[2]
+#       Parent.fc.weight[2] = Parents[Index + 1].fc.weight[2]
+#       Parents[Index + 1].fc.weight[2] = TempWeights
+#       NewPopulation.append(Parent)
+#       NewPopulation.append(Parents[Index + 1])
+#     Generating += 1
+#   #Mutate
+#   for Child in NewPopulation[:100]:
+#     if random.randint(0, 100) < 10:
+#       Node = random.randint(0,29)
+#       Layer = random.randint(0,2)
+#       Child.fc.weight[Layer,Node] = Child.fc.weight[Layer,Node] * (1 + (random.random(-1,1) * 0.2))
 
 JsonLoading(FileName=FileName)
 NNSetup(FileName=FileName)

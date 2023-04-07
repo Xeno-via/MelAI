@@ -20,8 +20,8 @@ class NeuralNetwork(nn.Module):
             nn.Linear(hidden_size, hidden_size),
             nn.ReLU(),
             nn.Linear(hidden_size, hidden_size),
-            nn.ReLU(),
-            nn.Linear(hidden_size, hidden_size),
+            # nn.ReLU(),
+            # nn.Linear(hidden_size, hidden_size),
             nn.ReLU(),
             nn.Linear(hidden_size, output_size)
         )
@@ -37,7 +37,7 @@ class QTrain:
         self.LearningRate = LearningRate
         self.Gamma = Gamma
         self.FileName = FileName
-        self.NN = NeuralNetwork(14, 50, 30).Model
+        self.NN = NeuralNetwork(14, 40, 30).Model
         self.NN.to(device)
         self.Target = copy.deepcopy(self.NN)
         self.Target.to(device)
@@ -103,11 +103,11 @@ class QTrain:
         Done = torch.from_numpy(np.asarray(Done))
 
         if self.CurrentStep % self.SyncEvery == 0:
-            print("Synced")
+            #print("Synced")
             self.SyncTarget()
         
         if self.CurrentStep % self.SaveEvery ==0:
-            print("Saved")
+            #print("Saved")
             self.save(self.FileName)
 
         
@@ -115,35 +115,7 @@ class QTrain:
         TDTarget = self.TDTarget(Reward, NextState, Done)
         Loss = self.UpdateQModel(TDEst, TDTarget)
         self.CurrentStep += 1
-
-
-    def TrainStep(self, State, Action, Reward, NextState):
-        State = torch.tensor(State, dtype=torch.float)
-        NextState = torch.tensor(NextState, dtype=torch.float)
-        Action = torch.tensor(Action, dtype=torch.int16)
-        Reward = torch.tensor(Reward, dtype=torch.float) # Turn values into tensors
-        if len(State.shape) == 1:
-            State = torch.unsqueeze(State, 0) # Do some dimention trickery
-            NextState = torch.unsqueeze(NextState, 0)
-            Action = torch.unsqueeze(Action, 0)
-            Reward = torch.unsqueeze(Reward, 0)
-        Prediction = GetPredictions(State, self.Model) # R + y * NextPredict Q Value
-        Prediction = torch.tensor(Prediction, dtype=torch.float)
-        Target = GetPredictions(NextState, self.Target)
-        Target = torch.tensor(Target, dtype=torch.float)
-        target = Prediction.clone()
-        for i in range(len(State)):
-            #print(len(State.detach().numpy()))
-            #print(State)
-            TDTarget = Reward[i] + self.Gamma * torch.max(torch.tensor(GetPredictions(NextState[i], self.Model), dtype=torch.float))
-            #print(torch.argmax(Action).item())
-            target[i][torch.argmax(Action[i]).item()] = QNew
-
-        self.Optimizer.zero_grad()
-        Loss = self.Criterion(Prediction.detach(), target.detach())
-        Loss.requires_grad = True
-        Loss.backward()
-        self.Optimizer.step()
+        return TDEst.mean().item(), Loss
 
 
 class ReinforceTrainer:
@@ -173,9 +145,6 @@ class ReinforceTrainer:
         ModelLoss.requires_grad = True
         ModelLoss.backward()
         self.Optimizer.step()
-    
-
-
     
 
 
