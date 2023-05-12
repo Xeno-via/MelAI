@@ -420,8 +420,7 @@ def JsonWrite(FileName):
   with open("Plotting/"+ FileName + ".json", 'w') as f:
     json.dump(PlotObj, f)
   Score = 0
-
-
+    
 # def EvolutionTrainer(): # Carry over from Evolutionary Approach
 #   pass
 #   Counter = 0
